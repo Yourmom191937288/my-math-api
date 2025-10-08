@@ -1,48 +1,77 @@
 // 1. Import necessary libraries
 const express = require('express');
-const cors = require('cors'); // To handle cross-origin requests from the browser
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-require('dotenv').config(); // To load your secret API key from the .env file
+const cors = require('cors');
+require('dotenv').config();
 
 // 2. Configure the server
 const app = express();
-app.use(express.json()); // Middleware to parse JSON request bodies
-app.use(cors()); // Middleware to allow browser requests from any origin
+app.use(express.json());
+app.use(cors());
 
-// 3. Initialize the Google AI Client
-// The API key is loaded securely from your .env file
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// 4. Create your API endpoint
+// --- ENDPOINT #1: TEXT SOLVER ---
 app.post('/solve-math', async (req, res) => {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-    
-    // Get the math problem from the request sent by the browser
+    const TEXT_API_URL = "https://api-inference.huggingface.co/models/google/gemma-2b-it";
     const userProblem = req.body.problem;
 
-    // Basic validation: make sure a problem was sent
     if (!userProblem) {
       return res.status(400).json({ error: "No problem provided." });
     }
-    
-    // Send the problem to the Gemini API
-    const result = await model.generateContent(userProblem);
-    const response = await result.response;
-    const aiAnswer = response.text();
 
-    // Send the AI's final answer back to the browser
-    console.log(`Problem: "${userProblem}" | Answer: "${aiAnswer}"`);
+    // Call the Hugging Face Text API
+    const response = await fetch(TEXT_API_URL, {
+      headers: { "Authorization": `Bearer ${process.env.HF_TOKEN}` },
+      method: "POST",
+      body: JSON.stringify({ inputs: userProblem }),
+    });
+
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    const aiAnswer = result[0].generated_text;
+
     res.json({ answer: aiAnswer });
-
   } catch (error) {
-    console.error("Error calling Gemini API:", error);
+    console.error("Error calling Hugging Face Text API:", error);
     res.status(500).json({ error: "Something went wrong on the server." });
   }
 });
 
+// --- ENDPOINT #2: IMAGE READER (FROM URL) ---
+app.post('/read-image-from-url', async (req, res) => {
+  try {
+    // The URL for a specific image-to-text model on Hugging Face
+    const IMAGE_API_URL = "https://api-inference.huggingface.co/models/Salesforce/blip-image-captioning-large";
+    const { imageUrl } = req.body;
+
+    if (!imageUrl) {
+      return res.status(400).json({ error: "An imageUrl is required." });
+    }
+
+    // 1. Your server fetches the image from the provided URL
+    const imageResponse = await fetch(imageUrl);
+    if (!imageResponse.ok) throw new Error('Failed to fetch the image from the URL.');
+    const imageBlob = await imageResponse.blob();
+
+    // 2. Your server sends the raw image data to the Hugging Face Image API
+    const hfResponse = await fetch(IMAGE_API_URL, {
+      headers: { "Authorization": `Bearer ${process.env.HF_TOKEN}` },
+      method: "POST",
+      body: imageBlob,
+    });
+
+    if (!hfResponse.ok) throw new Error(await hfResponse.text());
+    const result = await hfResponse.json();
+    const caption = result[0].generated_text;
+
+    res.json({ answer: caption });
+  } catch (error) {
+    console.error("Error in /read-image-from-url:", error);
+    res.status(500).json({ error: "Something went wrong." });
+  }
+});
+
 // 5. Start the server
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
